@@ -29,7 +29,7 @@ Graphics_Backend :: struct {
 	vertex_buffer:   ^D3D11.IBuffer,
     index_buffer:    ^D3D11.IBuffer,
     constant_buffer: ^D3D11.IBuffer,
-    
+
     shader_resource_views: [2]^D3D11.IShaderResourceView,
     vertex_shader: ^D3D11.IVertexShader,
     pixel_shader:  ^D3D11.IPixelShader,
@@ -70,7 +70,6 @@ _window_open :: proc(title: string) {
     case: window_width, window_height = 640, 360
     }
 
-    // Optionally, ensure the window fits within the screen
     if i32(screen_width) < window_width {
         window_width = i32(screen_width)
         window_height = i32(f32(window_width) * 9 / 16)
@@ -105,13 +104,13 @@ _window_show :: proc() {
 
 register_raw_input_devices :: proc(hwnd: win.HWND) {
 	rid: [2]win.RAWINPUTDEVICE
-	rid[0].usUsagePage = 0x01          // HID_USAGE_PAGE_GENERIC
-	rid[0].usUsage = 0x02              // HID_USAGE_GENERIC_MOUSE
-	rid[0].dwFlags = win.RIDEV_INPUTSINK    // adds mouse and also ignores legacy mouse messages
+	rid[0].usUsagePage = 0x01             // HID_USAGE_PAGE_GENERIC
+	rid[0].usUsage = 0x02                 // HID_USAGE_GENERIC_MOUSE
+	rid[0].dwFlags = win.RIDEV_INPUTSINK  // adds mouse and also ignores legacy mouse messages
 	rid[0].hwndTarget = hwnd
 
-	rid[1].usUsagePage = 0x01          // HID_USAGE_PAGE_GENERIC
-	rid[1].usUsage = 0x06              // HID_USAGE_GENERIC_KEYBOARD
+	rid[1].usUsagePage = 0x01              // HID_USAGE_PAGE_GENERIC
+	rid[1].usUsage = 0x06                  // HID_USAGE_GENERIC_KEYBOARD
 	rid[1].dwFlags = win.RIDEV_INPUTSINK   // adds keyboard and also ignores legacy keyboard messages
 	rid[1].hwndTarget = hwnd
 
@@ -182,7 +181,6 @@ process_raw_input :: proc(lParam: win.LPARAM) {
             update_mouse_state(.Middle, false)
         }
 
-        // Process mouse wheel
         if mouse.usButtonFlags & win.RI_MOUSE_WHEEL != 0 {
             wheel_delta := cast(i16)mouse.usButtonData
             app_state.input.mouse_scroll_y = f32(wheel_delta) / f32(win.WHEEL_DELTA)
@@ -472,7 +470,7 @@ _graphics_start_frame :: proc() {
 
     mapped_subresource: D3D11.MAPPED_SUBRESOURCE
 	app_state.gfx.backend.device_ctx->Map(app_state.gfx.backend.vertex_buffer, 0, .WRITE_DISCARD, {}, &mapped_subresource)
-	mem.copy(mapped_subresource.pData, &app_state.gfx.frame.quads[0], size_of(app_state.gfx.frame.quads))
+	mem.copy(mapped_subresource.pData, &app_state.gfx.frame.quads[0], size_of(Quad) * app_state.gfx.frame.quad_count)
 	app_state.gfx.backend.device_ctx->Unmap(app_state.gfx.backend.vertex_buffer, 0)
 
     app_state.gfx.backend.device_ctx->IASetPrimitiveTopology(.TRIANGLELIST)
@@ -581,7 +579,6 @@ _generate_input_layout :: proc (vertex_shader_blob: ^D3D11.IBlob) -> (^D3D11.IIn
 	IShaderReflectionType_UUID_STRING :: "8d536ca1-0cca-4956-a837-786963755584"
 	IShaderReflectionType_UUID := &D3D.IID{0x8d536ca1, 0x0cca, 0x4956, {0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84}}
 
-	// reflect the vertex shader
 	vertex_shader_reflection: ^D3D11.IShaderReflection
 	reflect_result := D3D.Reflect(vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), IShaderReflectionType_UUID, (^rawptr)(&vertex_shader_reflection))
 
@@ -616,7 +613,6 @@ _generate_input_layout :: proc (vertex_shader_blob: ^D3D11.IBlob) -> (^D3D11.IIn
 			return nil, param_desc_result
 		}
 
-		// add the input element description to the input layout description
 		input_element_desc: D3D11.INPUT_ELEMENT_DESC
 
 		input_element_desc.SemanticName         = signature_parameter_desc.SemanticName
