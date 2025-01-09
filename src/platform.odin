@@ -10,23 +10,22 @@ import "core:os"
 import "core:log"
 import "base:runtime"
 
+import stbi  "vendor:stb/image"
+
 PROFILE_ENABLE :: #config(PROFILE_ENABLE, false)
 
 MAX_QUADS :: 8192
 Quad      :: distinct [4]Vertex
 
 Vertex :: struct #align(16) {
-    pos: Vec2,
-    col: Color,
+    pos:          Vec2,
+    col:          Color,
+    uv:           Vec2,
+    col_override: Color,
+    tex_index:      u8,
 }
 
 app_state: App_State
-
-when PROFILE_ENABLE {
-    spall_ctx: spall.Context
-    spall_buffer_backing: []u8
-    spall_buffer: spall.Buffer
-}
 
 App_State :: struct {
     input: Input_State,
@@ -241,6 +240,12 @@ main :: proc() {
 
     window_open(GAME_TITLE)
 
+    data, width, height, ok := load_image("res/img/atlas.png")
+    ensure(ok, "Failed to load new texture atlas")
+
+    app_state.gfx.backend.main_texture, ok  = _upload_texture(&data[0], width, height)
+    ensure(ok, "Failed to upload texture atlas")
+
     game_init()
 
     last_frame_time := time.now()
@@ -281,6 +286,12 @@ frame_end :: proc() {
 
 quit :: proc() {
     app_state.running = false
+}
+
+when PROFILE_ENABLE {
+    spall_ctx: spall.Context
+    spall_buffer_backing: []u8
+    spall_buffer: spall.Buffer
 }
 
 @(deferred_in=_profile_buffer_end)
@@ -363,12 +374,38 @@ set_camera :: proc(pos: Vec2, zoom: f32, res := Vec2{}, origin: Origin = .Center
     app_state.gfx.frame.camera_xform *= xform_scale(Vec2{1, 1}) // Remove zoom from here
 }
 
+draw_sprite :: proc(pos: Vec2, img_id: Image_Name, pivot:= Pivot.bottom_center, color:=COLOR_WHITE, color_override:=COLOR_ZERO) {
+	image := IMAGE_INFO[img_id]
+	size := Vec2{f32(image.width), f32(image.height)}
 
+	xform0 := Mat4(1)
+	xform0 *= xform_translate(pos)
+	xform0 *= xform_translate(size * -scale_from_pivot(pivot))
 
-Image_Name :: enum {
-    nil,
-    font,
+	draw_rect_matrix(xform0, size, color=color, color_override=color_override, img_id=img_id, uv=image.uv)
 }
+
+draw_sprite_in_rect :: proc(rect: Rect, img_id: Image_Name, pivot := Pivot.center, color := COLOR_WHITE, color_override := COLOR_ZERO) {
+    image := IMAGE_INFO[img_id]
+    img_size := Vec2{auto_cast image.width, auto_cast image.height}
+    rect_size := Vec2{rect.width, rect.height}
+
+    // Calculate scale to fit the image within the rect while maintaining aspect ratio
+    scale := min(rect_size.x / img_size.x, rect_size.y / img_size.y)
+    scaled_size := img_size * scale
+
+    // Calculate position to center the scaled image within the rect
+    pos := Vec2{rect.x, rect.y} + (rect_size - scaled_size) * 0.5
+
+    // Create transformation matrix
+    xform := Mat4(1)
+    xform *= xform_translate({pos.x, pos.y})
+    xform *= xform_scale(scale)
+    xform *= xform_translate(img_size * -scale_from_pivot(pivot))
+
+    draw_rect_matrix(xform, img_size, color=color, color_override=color_override, img_id=img_id, uv=image.uv)
+}
+
 
 draw_rect :: proc(rect: Rect, pivot: Pivot, color: Color, color_override:=COLOR_ZERO, uv:=DEFAULT_UV,  img_id: Image_Name= .nil) {
     PROFILE(#procedure)
@@ -386,7 +423,7 @@ draw_rect_projected :: proc(
     size:          Vec2,
 
     col            := COLOR_WHITE,
-    color_override :=COLOR_ZERO,
+    color_override := COLOR_ZERO,
     uv             := DEFAULT_UV,
     img_id         := Image_Name.nil,
 ) {
@@ -397,14 +434,16 @@ draw_rect_projected :: proc(
 	br := Vec2{ size.x, 0 }
 
     uv0 := uv
-    // if uv == DEFAULT_UV {
-    //     uv0 = atlas_image.atlas_uvs
-    // }
+    if uv == DEFAULT_UV {
+        //tex := app_state.gfx.backend.main_texture
+        uv0 = {0,0, 1, 1}
+    }
 
     tex_index :[4]u8= 0 //atlas_image.tex_index
 
 	if img_id == .nil {
 		tex_index = 255 // bypasses texture sampling
+		//log_info("Not using a texture")
 	}
 
 	if img_id == .font {
@@ -440,20 +479,21 @@ draw_quad_projected :: proc(
 	verts[2].col = colors[2]
 	verts[3].col = colors[3]
 
-    // verts[0].uv = uvs[0]
-    // verts[1].uv = uvs[1]
-    // verts[2].uv = uvs[2]
-    // verts[3].uv = uvs[3]
+    verts[0].uv = uvs[0]
+    verts[1].uv = uvs[1]
+    verts[2].uv = uvs[2]
+    verts[3].uv = uvs[3]
 
-    // verts[0].tex_index = tex_indicies[0]
-    // verts[1].tex_index = tex_indicies[1]
-    // verts[2].tex_index = tex_indicies[2]
-    // verts[3].tex_index = tex_indicies[3]
 
-    // verts[0].color_override = col_overrides[0]
-    // verts[1].color_override = col_overrides[1]
-    // verts[2].color_override = col_overrides[2]
-    // verts[3].color_override = col_overrides[3]
+    verts[0].tex_index = tex_indicies[0]
+    verts[1].tex_index = tex_indicies[1]
+    verts[2].tex_index = tex_indicies[2]
+    verts[3].tex_index = tex_indicies[3]
+
+    verts[0].col_override = col_overrides[0]
+    verts[1].col_override = col_overrides[1]
+    verts[2].col_override = col_overrides[2]
+    verts[3].col_override = col_overrides[3]
 }
 
 //INUPT
@@ -748,4 +788,23 @@ inset_rect :: proc(r: ^Rect, inset_x: f32, inset_y: f32) -> Rect {
 
 make_rect :: proc(pos, size: Vec2) -> Rect {
     return {pos.x, pos.y, size.x, size.y}
+}
+
+load_image :: proc(path: string) -> (data: [^]byte, width, height: int, ok: bool) {
+    png_data, succ := os.read_entire_file(path)
+    if !succ {
+        fmt.eprintln("Failed to read image file:", path)
+        return
+    }
+
+    w, h, channels: i32
+    img_data := stbi.load_from_memory(raw_data(png_data), auto_cast len(png_data), &w, &h, &channels, 4)
+    if img_data == nil {
+        fmt.eprintln("stbi load failed, invalid image?")
+        return
+    }
+
+    log_info("Loaded image from path: {} ({}x{})", path, w, h)
+
+    return img_data,  int(w), int(h), true
 }

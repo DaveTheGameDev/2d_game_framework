@@ -9,7 +9,9 @@ import "core:c"
 import "core:strings"
 import "core:os"
 import "core:path/filepath"
+import "core:fmt"
 import "core:mem"
+
 
 Graphics_Backend :: struct {
     window: win.HWND,
@@ -34,10 +36,18 @@ Graphics_Backend :: struct {
     vertex_shader: ^D3D11.IVertexShader,
     pixel_shader:  ^D3D11.IPixelShader,
     input_layout:  ^D3D11.IInputLayout,
+
+    main_texture:  DX11Texture,
 }
 
 GlobalConstants :: struct #align(16) {
 	mvp: Mat4,
+}
+
+DX11Texture :: struct {
+	texture:      ^D3D11.ITexture2D,
+	texture_view: ^D3D11.IShaderResourceView,
+	width, height: int,
 }
 
 _window_open :: proc(title: string) {
@@ -162,7 +172,7 @@ process_raw_input :: proc(lParam: win.LPARAM) {
         app_state.input.mouse_move_delta = {f32(deltaX), f32(deltaY)}
 
         // Process mouse buttons
-        if mouse.usButtonFlags & win.RI_MOUSE_LEFT_BUTTON_DOWNS != 0 {
+        if mouse.usButtonFlags & win.RI_MOUSE_LEFT_BUTTON_DOWN != 0 {
             update_mouse_state(.Left, true)
         }
         if mouse.usButtonFlags & win.RI_MOUSE_LEFT_BUTTON_UP != 0 {
@@ -484,7 +494,7 @@ _graphics_start_frame :: proc() {
     app_state.gfx.backend.device_ctx->VSSetShader( app_state.gfx.backend.vertex_shader, nil, 0)
     app_state.gfx.backend.device_ctx->PSSetShader( app_state.gfx.backend.pixel_shader, nil, 0)
 
-    //app_state.gfx.backend.device_ctx->PSSetShaderResources(0, 2, &app_state.gfx.backend.shader_resource_views[0])
+    app_state.gfx.backend.device_ctx->PSSetShaderResources(0, 1, &app_state.gfx.backend.main_texture.texture_view)
     app_state.gfx.backend.device_ctx->PSSetSamplers(0, 1, &app_state.gfx.backend.sampler_state)
 }
 
@@ -494,6 +504,50 @@ _graphics_present_frame :: proc() {
     }
     app_state.gfx.backend.swapchain->Present(1, {})
 }
+
+_upload_texture :: proc(texture_data: rawptr, width, height: int, mips: u32 = 1) -> (DX11Texture, bool) {
+    texture_desc := D3D11.TEXTURE2D_DESC{
+        Width      = u32(width),
+        Height     = u32(height),
+        MipLevels  = mips,
+        ArraySize  = 1,
+        Format     = .R8G8B8A8_UNORM_SRGB,
+        SampleDesc = {Count = 1},
+        Usage      = .IMMUTABLE,
+        BindFlags  = {.SHADER_RESOURCE},
+    }
+
+    texture_data := D3D11.SUBRESOURCE_DATA{
+        pSysMem     = texture_data,
+        SysMemPitch = u32(width * 4),
+    }
+
+    texture: ^D3D11.ITexture2D
+    tex_res := app_state.gfx.backend.device->CreateTexture2D(&texture_desc, &texture_data, &texture)
+
+    if tex_res != 0 {
+        error_msg := _get_d3d_error_message(tex_res)
+        log_error(fmt.tprintf("Failed to create texture. Error: %s (HRESULT: 0x%x)", error_msg, tex_res))
+        return {}, false
+    }
+
+    texture_view: ^D3D11.IShaderResourceView
+    tex_view_res := app_state.gfx.backend.device->CreateShaderResourceView(texture, nil, &texture_view)
+
+    if tex_view_res != 0 {
+        if texture != nil {
+            safe_free(texture)
+        }
+        error_msg := _get_d3d_error_message(tex_view_res)
+        log_error(fmt.tprintf("Failed to create texture view. Error: %s (HRESULT: 0x%x)", error_msg, tex_view_res))
+        return {}, false
+    }
+
+    log_info(fmt.tprintf("Successfully uploaded texture to GPU. Size: %dx%d, Mips: %d", width, height, mips))
+
+    return {texture, texture_view, int(width), int(height)}, true
+}
+
 
 _compile_shader :: proc {
 	_compile_shader_from_path,
@@ -944,4 +998,21 @@ WinKeyCode :: enum u32 {
     Zoom = 0xFB,
     PA1 = 0xFD,
     OEMClear = 0xFE,
+}
+
+_get_d3d_error_message :: proc(hr: win.HRESULT) -> string {
+    switch i64(hr) {
+    case win.E_INVALIDARG:
+        return "Invalid argument"
+    case i64(win.E_OUTOFMEMORY):
+        return "Out of memory"
+    case i64(win.E_NOTIMPL):
+        return "Not implemented"
+    case i64(win.E_FAIL):
+        return "Unspecified failure"
+    case i64(win.E_NOINTERFACE):
+        return "No interface"
+    case:
+        return fmt.tprintf("Unknown error (HRESULT: 0x%x)", hr)
+    }
 }

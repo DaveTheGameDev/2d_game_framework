@@ -1,1 +1,5 @@
 bin/
+*.exe
+generated.odin
+*.ase
+*.png
