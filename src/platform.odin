@@ -6,6 +6,7 @@ import "core:math"
 import "core:math/linalg"
 import "core:fmt"
 import "core:strings"
+import "core:path/filepath"
 import "core:os"
 import "core:log"
 import "base:runtime"
@@ -13,6 +14,7 @@ import "base:runtime"
 import stbi  "vendor:stb/image"
 
 PROFILE_ENABLE :: #config(PROFILE_ENABLE, false)
+IMGUI_ENABLE :: #config(IMGUI_ENABLE, false)
 
 MAX_QUADS :: 8192
 Quad      :: distinct [4]Vertex
@@ -49,8 +51,6 @@ Camera :: struct {
 }
 
 Graphics_State :: struct {
-    backend: Graphics_Backend,
-
     fullscreen:    bool,
     screen_height: int,
     screen_width:  int,
@@ -205,6 +205,7 @@ COLOR_ZERO    :: Color { 0,   0,   0,   0 }
 
 // APP
 main :: proc() {
+    os.set_current_directory(filepath.dir(os.args[0], context.temp_allocator))
     when PROFILE_ENABLE {
         spall_ctx = spall.context_create("trace.spall", 1)
         defer spall.context_destroy(&spall_ctx)
@@ -243,7 +244,7 @@ main :: proc() {
     data, width, height, ok := load_image("res/img/atlas.png")
     ensure(ok, "Failed to load new texture atlas")
 
-    app_state.gfx.backend.main_texture, ok  = _upload_texture(&data[0], width, height)
+    main_texture, ok  = _upload_texture(&data[0], width, height)
     ensure(ok, "Failed to upload texture atlas")
 
     game_init()
@@ -265,7 +266,7 @@ main :: proc() {
         }
 
         frame_start()
-
+        game_imgui_frame(dt)
         frame_end()
         app_state.gfx.frame = {}
     }
@@ -321,10 +322,6 @@ window_poll :: proc() {
 
 window_show_message_box :: proc(title, msg: string, msg_type: MessageBoxType) {
     _window_show_message_box(title, msg, msg_type)
-}
-
-window_show :: proc() {
-    _window_show()
 }
 
 window_set_fullscreen :: proc(fullscreen: bool) {
@@ -433,24 +430,17 @@ draw_rect_projected :: proc(
 	tr := Vec2{ size.x, size.y }
 	br := Vec2{ size.x, 0 }
 
-    uv0 := uv
-    if uv == DEFAULT_UV {
-        //tex := app_state.gfx.backend.main_texture
-        uv0 = {0,0, 1, 1}
-    }
-
-    tex_index :[4]u8= 0 //atlas_image.tex_index
+    tex_index: [4]u8
 
 	if img_id == .nil {
 		tex_index = 255 // bypasses texture sampling
-		//log_info("Not using a texture")
 	}
 
 	if img_id == .font {
 		tex_index = 1 // draws the font
 	}
 
-	draw_quad_projected(world_to_clip, {bl, tl, tr, br}, col, {uv0.xy, uv0.xw, uv0.zw, uv0.zy}, tex_index, color_override)
+	draw_quad_projected(world_to_clip, {bl, tl, tr, br}, col, {uv.xy, uv.xw, uv.zw, uv.zy}, tex_index, color_override)
 }
 
 draw_quad_projected :: proc(

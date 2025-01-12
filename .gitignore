@@ -3,3 +3,7 @@ bin/
 generated.odin
 *.ase
 *.png
+.odin-cache
+*.pdb
+*.spall
+log.txt

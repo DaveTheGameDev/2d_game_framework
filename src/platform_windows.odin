@@ -12,42 +12,42 @@ import "core:path/filepath"
 import "core:fmt"
 import "core:mem"
 
+import im "odin-imgui"
+import im_dx "odin-imgui/imgui_impl_dx11"
+import im_win "odin-imgui/imgui_impl_win32"
 
-Graphics_Backend :: struct {
-    window: win.HWND,
+window: win.HWND
 
-    device:     ^D3D11.IDevice,
-    device_ctx: ^D3D11.IDeviceContext,
-    swapchain:  ^DXGI.ISwapChain1,
+device:     ^D3D11.IDevice
+device_ctx: ^D3D11.IDeviceContext
+swapchain:  ^DXGI.ISwapChain1
 
-    rasterizer_state:    ^D3D11.IRasterizerState,
-	sampler_state:       ^D3D11.ISamplerState,
+rasterizer_state:    ^D3D11.IRasterizerState
+sampler_state:       ^D3D11.ISamplerState
 
-	framebuffer:         ^D3D11.ITexture2D,
-	framebuffer_view:    ^D3D11.IRenderTargetView,
+framebuffer_view:    ^D3D11.IRenderTargetView
 
-	blend_state:         ^D3D11.IBlendState,
+blend_state:         ^D3D11.IBlendState
 
-	vertex_buffer:   ^D3D11.IBuffer,
-    index_buffer:    ^D3D11.IBuffer,
-    constant_buffer: ^D3D11.IBuffer,
+vertex_buffer:   ^D3D11.IBuffer
+index_buffer:    ^D3D11.IBuffer
+constant_buffer: ^D3D11.IBuffer
 
-    shader_resource_views: [2]^D3D11.IShaderResourceView,
-    vertex_shader: ^D3D11.IVertexShader,
-    pixel_shader:  ^D3D11.IPixelShader,
-    input_layout:  ^D3D11.IInputLayout,
+shader_resource_views: [2]^D3D11.IShaderResourceView
+vertex_shader: ^D3D11.IVertexShader
+pixel_shader:  ^D3D11.IPixelShader
+input_layout:  ^D3D11.IInputLayout
 
-    main_texture:  DX11Texture,
-}
+main_texture:  DX11Texture
 
 GlobalConstants :: struct #align(16) {
-	mvp: Mat4,
+    mvp: Mat4,
 }
 
 DX11Texture :: struct {
-	texture:      ^D3D11.ITexture2D,
-	texture_view: ^D3D11.IShaderResourceView,
-	width, height: int,
+    texture:      ^D3D11.ITexture2D,
+    texture_view: ^D3D11.IShaderResourceView,
+    width, height: int,
 }
 
 _window_open :: proc(title: string) {
@@ -59,7 +59,8 @@ _window_open :: proc(title: string) {
     class := win.WNDCLASSW {
         lpfnWndProc   = win_proc,
         lpszClassName = class_name,
-		hInstance     = instance,
+        hInstance     = instance,
+        hCursor       = win.LoadCursorA(nil, win.IDC_ARROW), // Set this otherwise spinny cursor shows
     }
 
     class_handle := win.RegisterClassW(&class)
@@ -67,76 +68,60 @@ _window_open :: proc(title: string) {
 
     win.SetProcessDPIAware()
 
-    screen_width := win.GetSystemMetrics(win.SM_CXSCREEN)
+    screen_width  := win.GetSystemMetrics(win.SM_CXSCREEN)
     screen_height := win.GetSystemMetrics(win.SM_CYSCREEN)
 
     window_width, window_height: i32
 
     // Helper to default the window size to common res value in window mode
     switch {
-    case  screen_height >= 2160: window_width, window_height = 2560, 1440
-    case  screen_height >= 1440: window_width, window_height = 1920, 1080
-    case  screen_height >= 1080: window_width, window_height = 1280, 720
-    case: window_width, window_height = 640, 360
-    }
-
-    if i32(screen_width) < window_width {
-        window_width = i32(screen_width)
-        window_height = i32(f32(window_width) * 9 / 16)
-    }
-    if i32(screen_height) < window_height {
-        window_height = i32(screen_height)
-        window_width = i32(f32(window_height) * 16 / 9)
+        case  screen_height >= 2160: window_width, window_height = 2560, 1440
+        case  screen_height >= 1440: window_width, window_height = 1920, 1080
+        case  screen_height >= 1080: window_width, window_height = 1280, 720
+        case: window_width, window_height = 640, 360
     }
 
     window_x := (screen_width - c.int(window_width)) / 2
     window_y := (screen_height - c.int(window_height)) / 2
 
-    app_state.gfx.backend.window = win.CreateWindowW(class_name,
-		class_name,
-		win.WS_OVERLAPPEDWINDOW,
-		window_x, window_y, c.int(window_width), c.int(window_height),
-		nil, nil, instance, nil)
-    assert(app_state.gfx.backend.window != nil, "Window creation Failed")
-    register_raw_input_devices(app_state.gfx.backend.window)
+    window = win.CreateWindowW(class_name, class_name,
+        win.WS_OVERLAPPEDWINDOW,
+        window_x, window_y, c.int(window_width), c.int(window_height),
+        nil, nil, instance, nil)
 
-    app_state.gfx.screen_width = int(screen_width)
+    assert(window != nil, "Window creation Failed")
+    register_raw_input_devices(window)
+
+    app_state.gfx.screen_width  = int(screen_width)
     app_state.gfx.screen_height = int(screen_height)
-    app_state.gfx.screen_height = int(screen_height)
-    app_state.gfx.window_width = int(window_width)
+    app_state.gfx.window_width  = int(window_width)
     app_state.gfx.window_height = int(window_height)
 }
 
-_window_show :: proc() {
-    win.ShowWindow(app_state.gfx.backend.window, 1)
-    win.UpdateWindow(app_state.gfx.backend.window)
-}
-
 register_raw_input_devices :: proc(hwnd: win.HWND) {
-	rid: [2]win.RAWINPUTDEVICE
-	rid[0].usUsagePage = 0x01             // HID_USAGE_PAGE_GENERIC
-	rid[0].usUsage = 0x02                 // HID_USAGE_GENERIC_MOUSE
-	rid[0].dwFlags = win.RIDEV_INPUTSINK  // adds mouse and also ignores legacy mouse messages
-	rid[0].hwndTarget = hwnd
+    rid: [2]win.RAWINPUTDEVICE
+    rid[0].usUsagePage = 0x01             // HID_USAGE_PAGE_GENERIC
+    rid[0].usUsage = 0x02                 // HID_USAGE_GENERIC_MOUSE
+    rid[0].dwFlags = win.RIDEV_INPUTSINK  // adds mouse and also ignores legacy mouse messages
+    rid[0].hwndTarget = hwnd
 
-	rid[1].usUsagePage = 0x01              // HID_USAGE_PAGE_GENERIC
-	rid[1].usUsage = 0x06                  // HID_USAGE_GENERIC_KEYBOARD
-	rid[1].dwFlags = win.RIDEV_INPUTSINK   // adds keyboard and also ignores legacy keyboard messages
-	rid[1].hwndTarget = hwnd
+    rid[1].usUsagePage = 0x01              // HID_USAGE_PAGE_GENERIC
+    rid[1].usUsage = 0x06                  // HID_USAGE_GENERIC_KEYBOARD
+    rid[1].dwFlags = win.RIDEV_INPUTSINK   // adds keyboard and also ignores legacy keyboard messages
+    rid[1].hwndTarget = hwnd
 
-	if !win.RegisterRawInputDevices(&rid[0], 2, size_of(rid[0]))
-	{
-	    panic("Failed to register raw input devices")
-	}
+    if !win.RegisterRawInputDevices(&rid[0], 2, size_of(rid[0]))
+    {
+        panic("Failed to register raw input devices")
+    }
 }
 
 _window_poll :: proc() {
-    win.SetCursor(win.LoadCursorA(nil, win.IDC_ARROW))
     msg: win.MSG
 
     for win.PeekMessageW(&msg, nil, 0, 0, 1) {
         win.TranslateMessage(&msg)
-		win.DispatchMessageW(&msg)
+        win.DispatchMessageW(&msg)
     }
 }
 
@@ -156,7 +141,7 @@ process_raw_input :: proc(lParam: win.LPARAM) {
         app_state.input.mouse_position = -1
     }
 
-	dwSize: u32
+    dwSize: u32
     win.GetRawInputData(win.HRAWINPUT(lParam), win.RID_INPUT, nil, &dwSize, size_of(win.RAWINPUTHEADER))
     data := lpb_buffer[:dwSize]
 
@@ -166,7 +151,7 @@ process_raw_input :: proc(lParam: win.LPARAM) {
 
     raw := cast(^win.RAWINPUT)raw_data(data)
     if (raw.header.dwType == win.RIM_TYPEMOUSE) {
-               mouse := raw.data.mouse
+        mouse := raw.data.mouse
         deltaX := mouse.lLastX
         deltaY := mouse.lLastY
         app_state.input.mouse_move_delta = {f32(deltaX), f32(deltaY)}
@@ -197,14 +182,14 @@ process_raw_input :: proc(lParam: win.LPARAM) {
         }
     } else if raw.header.dwType == win.RIM_TYPEKEYBOARD {
         key := _remap_key(WinKeyCode(raw.data.keyboard.VKey))
-		if (raw.data.keyboard.Flags & win.RI_KEY_BREAK == 0) {
-		    current_state := app_state.input.key_states[key]
-		    new_pressed_state :Key_State= current_state.pressed == .None ? .Pressed : .Blocked
-		    app_state.input.key_states[key] = {current = .Pressed, pressed = new_pressed_state}
-		} else {
-			app_state.input.key_states[key] = {current = .Released, pressed = .None}
-		}
-	}
+        if (raw.data.keyboard.Flags & win.RI_KEY_BREAK == 0) {
+            current_state := app_state.input.key_states[key]
+            new_pressed_state :Key_State= current_state.pressed == .None ? .Pressed : .Blocked
+            app_state.input.key_states[key] = {current = .Pressed, pressed = new_pressed_state}
+        } else {
+            app_state.input.key_states[key] = {current = .Released, pressed = .None}
+        }
+    }
 }
 
 update_mouse_state :: proc(button: Mouse_Button, is_down: bool) {
@@ -219,70 +204,73 @@ update_mouse_state :: proc(button: Mouse_Button, is_down: bool) {
 
 _window_closed :: proc(hwnd: win.HWND) {
     app_state.running = false
-	win.DestroyWindow(hwnd)
+    win.DestroyWindow(hwnd)
 }
 
 _window_on_resized :: proc(wparam: win.WPARAM, lparam: win.LPARAM) {
     app_state.gfx.window_width  = int(win.LOWORD(win.DWORD(lparam)))
-	   app_state.gfx.window_height = int(win.HIWORD(win.DWORD(lparam)))
-	   app_state.gfx.window_resized = true
+    app_state.gfx.window_height = int(win.HIWORD(win.DWORD(lparam)))
+    app_state.gfx.window_resized = true
 }
 
 @(private="file")
 win_proc :: proc "stdcall" (hwnd: win.HWND, msg: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) -> win.LRESULT {
     context = app_state.odin_ctx
-	switch(msg) {
-	case win.WM_DESTROY:   win.PostQuitMessage(0); return 0
-	case win.WM_INPUT:     process_raw_input(lparam); return 0
-	case win.WM_SETFOCUS:  app_state.gfx.window_focused = true; return 0
-	case win.WM_KILLFOCUS: app_state.gfx.window_focused = false; return 0
-	case win.WM_CLOSE:     _window_closed(hwnd); return 0
-	case win.WM_SIZE:      _window_on_resized(wparam, lparam); return 0
 
-	}
+    im_win.WndProcHandler(hwnd, msg, wparam, lparam)
 
-	return win.DefWindowProcW(hwnd, msg, wparam, lparam)
+    switch(msg) {
+        case win.WM_DESTROY:   win.PostQuitMessage(0); return 0
+        case win.WM_INPUT:     process_raw_input(lparam); return 0
+        case win.WM_SETFOCUS:  app_state.gfx.window_focused = true; return 0
+        case win.WM_KILLFOCUS: app_state.gfx.window_focused = false; return 0
+        case win.WM_CLOSE:     _window_closed(hwnd); return 0
+        case win.WM_SIZE:      _window_on_resized(wparam, lparam); return 0
+
+    }
+
+    return win.DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 _window_show_message_box :: proc(
-	title, msg: string,
-	msg_type: MessageBoxType,
+    title, msg: string,
+    msg_type: MessageBoxType,
 ) {
-	message_type: win.UINT = 0x00000000
+    message_type: win.UINT = 0x00000000
 
-	switch msg_type {
-		case .Info:    message_type |= 0x00000040
-		case .Warning: message_type |= 0x00000030
-		case .Error:   message_type |= 0x00000010
-	}
+    switch msg_type {
+        case .Info:    message_type |= 0x00000040
+        case .Warning: message_type |= 0x00000030
+        case .Error:   message_type |= 0x00000010
+    }
 
-	win.MessageBoxW(
-		app_state.gfx.backend.window,
-		win.utf8_to_wstring(msg),
-		win.utf8_to_wstring(title),
-		message_type,
-	)
+    win.MessageBoxW(
+        window,
+        win.utf8_to_wstring(msg),
+        win.utf8_to_wstring(title),
+        message_type,
+    )
 }
 
 _window_set_title :: proc(title: string) {
-	win.SetWindowTextW(app_state.gfx.backend.window, win.utf8_to_wstring(title))
+    win.SetWindowTextW(window, win.utf8_to_wstring(title))
 }
 
 _window_set_size :: proc(width, height: u32) {
-	win.SetWindowPos(app_state.gfx.backend.window, nil, 0, 0, c.int(width), c.int(height), 0x0001 | 0x0002)
+    win.SetWindowPos(window, nil, 0, 0, c.int(width), c.int(height), 0x0001 | 0x0002)
 }
 
 _window_get_size :: proc() -> (width, height: int) {
-	return app_state.gfx.window_width, app_state.gfx.window_height
+    return app_state.gfx.window_width, app_state.gfx.window_height
 }
 
 _window_set_position :: proc(x, y: u32) {
-	win.SetWindowPos(app_state.gfx.backend.window, nil, c.int(x), c.int(y), 0, 0, 0x0001 | 0x0002)
+    win.SetWindowPos(window, nil, c.int(x), c.int(y), 0, 0, 0x0001 | 0x0002)
 }
 
 _window_set_fullscreen :: proc(fullscreen: bool) {
     if fullscreen != app_state.gfx.fullscreen {
-        app_state.gfx.backend.swapchain->SetFullscreenState(win.BOOL(fullscreen), nil);
+        swapchain->SetFullscreenState(win.BOOL(fullscreen), nil);
         app_state.gfx.fullscreen = fullscreen
         _graphics_resize_buffers()
     }
@@ -290,57 +278,57 @@ _window_set_fullscreen :: proc(fullscreen: bool) {
 
 _graphics_init :: proc() -> () {
     feature_levels := [?]D3D11.FEATURE_LEVEL{._11_0, ._11_1}
-	device_flags: D3D11.CREATE_DEVICE_FLAGS
+    device_flags: D3D11.CREATE_DEVICE_FLAGS
     device_flags = {.BGRA_SUPPORT}
-	when ODIN_DEBUG {
+    when ODIN_DEBUG {
         device_flags = device_flags + { .DEBUG }
-	}
+    }
 
-	base_device: ^D3D11.IDevice
-	base_device_context: ^D3D11.IDeviceContext
+    base_device: ^D3D11.IDevice
+    base_device_context: ^D3D11.IDeviceContext
     defer safe_free(base_device)
     defer safe_free(base_device_context)
 
-	D3D11.CreateDevice(nil, .HARDWARE, nil, device_flags, &feature_levels[0], len(feature_levels), D3D11.SDK_VERSION, &base_device, nil, &base_device_context)
+    D3D11.CreateDevice(nil, .HARDWARE, nil, device_flags, &feature_levels[0], len(feature_levels), D3D11.SDK_VERSION, &base_device, nil, &base_device_context)
     assert(base_device != nil)
 
-	base_device->QueryInterface(D3D11.IDevice_UUID, (^rawptr)(&app_state.gfx.backend.device))
-    assert(app_state.gfx.backend.device != nil)
+    base_device->QueryInterface(D3D11.IDevice_UUID, (^rawptr)(&device))
+    assert(device != nil)
 
-	base_device_context->QueryInterface(D3D11.IDeviceContext_UUID, (^rawptr)(&app_state.gfx.backend.device_ctx))
-    assert(app_state.gfx.backend.device_ctx != nil)
+    base_device_context->QueryInterface(D3D11.IDeviceContext_UUID, (^rawptr)(&device_ctx))
+    assert(device_ctx != nil)
 
-	dxgi_device: ^DXGI.IDevice
-	defer safe_free(dxgi_device)
-	app_state.gfx.backend.device->QueryInterface(DXGI.IDevice_UUID, (^rawptr)(&dxgi_device))
+    dxgi_device: ^DXGI.IDevice
+    defer safe_free(dxgi_device)
+    device->QueryInterface(DXGI.IDevice_UUID, (^rawptr)(&dxgi_device))
     assert(dxgi_device != nil)
 
-	dxgi_adapter: ^DXGI.IAdapter
-	defer safe_free(dxgi_adapter)
-	dxgi_device->GetAdapter(&dxgi_adapter)
-	assert(dxgi_adapter != nil)
+    dxgi_adapter: ^DXGI.IAdapter
+    defer safe_free(dxgi_adapter)
+    dxgi_device->GetAdapter(&dxgi_adapter)
+    assert(dxgi_adapter != nil)
 
-	dxgi_factory: ^DXGI.IFactory2
-	defer safe_free(dxgi_factory)
-	dxgi_adapter->GetParent(DXGI.IFactory2_UUID, (^rawptr)(&dxgi_factory))
-	assert(dxgi_factory != nil)
+    dxgi_factory: ^DXGI.IFactory2
+    defer safe_free(dxgi_factory)
+    dxgi_adapter->GetParent(DXGI.IFactory2_UUID, (^rawptr)(&dxgi_factory))
+    assert(dxgi_factory != nil)
 
-	swapchain_desc := DXGI.SWAP_CHAIN_DESC1 {
-		Width       = u32(app_state.gfx.window_width),
-		Height      = u32(app_state.gfx.window_height),
-		Format      = .B8G8R8A8_UNORM_SRGB,
-		Stereo      = false,
-		SampleDesc  = {Count = 1, Quality = 0},
-		BufferUsage = {.RENDER_TARGET_OUTPUT},
-		BufferCount = 2,
-		Scaling     = .STRETCH,
-		SwapEffect  = .DISCARD,
-		AlphaMode   = .UNSPECIFIED,
-		Flags       = {},
-	}
+    swapchain_desc := DXGI.SWAP_CHAIN_DESC1 {
+        Width       = u32(app_state.gfx.window_width),
+        Height      = u32(app_state.gfx.window_height),
+        Format      = .B8G8R8A8_UNORM_SRGB,
+        Stereo      = false,
+        SampleDesc  = {Count = 1, Quality = 0},
+        BufferUsage = {.RENDER_TARGET_OUTPUT},
+        BufferCount = 2,
+        Scaling     = .STRETCH,
+        SwapEffect  = .DISCARD,
+        AlphaMode   = .UNSPECIFIED,
+        Flags       = {},
+    }
 
-	dxgi_factory->CreateSwapChainForHwnd(app_state.gfx.backend.device, app_state.gfx.backend.window, &swapchain_desc, nil, nil, &app_state.gfx.backend.swapchain)
-    assert(app_state.gfx.backend.swapchain != nil)
+    dxgi_factory->CreateSwapChainForHwnd(device, window, &swapchain_desc, nil, nil, &swapchain)
+    assert(swapchain != nil)
 
     blend_desc := D3D11.BLEND_DESC {
         AlphaToCoverageEnable  = false,
@@ -356,27 +344,27 @@ _graphics_init :: proc() -> () {
     blend_desc.RenderTarget[0].BlendOpAlpha          = .ADD
     blend_desc.RenderTarget[0].RenderTargetWriteMask = u8(D3D11.COLOR_WRITE_ENABLE_ALL)
 
-    app_state.gfx.backend.device->CreateBlendState(&blend_desc, &app_state.gfx.backend.blend_state)
-    assert(app_state.gfx.backend.blend_state != nil)
+    device->CreateBlendState(&blend_desc, &blend_state)
+    assert(blend_state != nil)
 
 
-	rasterizer_desc := D3D11.RASTERIZER_DESC {
-		FillMode = .SOLID,
-		CullMode = .BACK,
-		FrontCounterClockwise = false,
-	}
-	app_state.gfx.backend.device->CreateRasterizerState(&rasterizer_desc, &app_state.gfx.backend.rasterizer_state)
-    assert(app_state.gfx.backend.rasterizer_state != nil)
+    rasterizer_desc := D3D11.RASTERIZER_DESC {
+        FillMode = .SOLID,
+        CullMode = .BACK,
+        FrontCounterClockwise = false,
+    }
+    device->CreateRasterizerState(&rasterizer_desc, &rasterizer_state)
+    assert(rasterizer_state != nil)
 
-	sampler_desc := D3D11.SAMPLER_DESC {
-		Filter         = .MIN_MAG_MIP_POINT,
-		AddressU       = .WRAP,
-		AddressV       = .WRAP,
-		AddressW       = .WRAP,
-		ComparisonFunc = .NEVER,
-	}
-	app_state.gfx.backend.device->CreateSamplerState(&sampler_desc, &app_state.gfx.backend.sampler_state)
-	assert(app_state.gfx.backend.sampler_state != nil)
+    sampler_desc := D3D11.SAMPLER_DESC {
+        Filter         = .MIN_MAG_MIP_POINT,
+        AddressU       = .WRAP,
+        AddressV       = .WRAP,
+        AddressW       = .WRAP,
+        ComparisonFunc = .NEVER,
+    }
+    device->CreateSamplerState(&sampler_desc, &sampler_state)
+    assert(sampler_state != nil)
 
     _setup_buffers()
 
@@ -388,8 +376,8 @@ _graphics_init :: proc() -> () {
         CPUAccessFlags = {.WRITE},
     }
 
-    app_state.gfx.backend.device->CreateBuffer(&vertex_buffer_desc, nil, &app_state.gfx.backend.vertex_buffer)
-    assert(app_state.gfx.backend.vertex_buffer != nil)
+    device->CreateBuffer(&vertex_buffer_desc, nil, &vertex_buffer)
+    assert(vertex_buffer != nil)
 
     index_buffer_count :: MAX_QUADS * 6
     indices: [MAX_QUADS * 6]u16
@@ -415,52 +403,83 @@ _graphics_init :: proc() -> () {
         SysMemPitch = size_of(indices),
     }
 
-    app_state.gfx.backend.device->CreateBuffer(&index_buffer_desc, &index_data, &app_state.gfx.backend.index_buffer)
-    assert(app_state.gfx.backend.index_buffer != nil)
+    device->CreateBuffer(&index_buffer_desc, &index_data, &index_buffer)
+    assert(index_buffer != nil)
 
     constant_buffer_desc := D3D11.BUFFER_DESC{
-		ByteWidth      = size_of(GlobalConstants),
-		Usage          = .DYNAMIC,
-		BindFlags      = {.CONSTANT_BUFFER},
-		CPUAccessFlags = {.WRITE},
-	}
+        ByteWidth      = size_of(GlobalConstants),
+        Usage          = .DYNAMIC,
+        BindFlags      = {.CONSTANT_BUFFER},
+        CPUAccessFlags = {.WRITE},
+    }
 
-	app_state.gfx.backend.device->CreateBuffer(&constant_buffer_desc, nil, &app_state.gfx.backend.constant_buffer)
-    assert(app_state.gfx.backend.index_buffer != nil)
+    device->CreateBuffer(&constant_buffer_desc, nil, &constant_buffer)
+    assert(index_buffer != nil)
 
     // Create shader
     shader_data :: #load("shader.hlsl", []u8)
     if vertex, vertex_ok := _compile_shader(shader_data, "default_vertex_shader", ShaderType.Vertex); vertex_ok {
-		app_state.gfx.backend.vertex_shader, app_state.gfx.backend.input_layout = _create_vertex_shader_from_blob(vertex)
-	} else {
-		log_error("Failed to create default vertex shader")
-	}
+        vertex_shader, input_layout = _create_vertex_shader_from_blob(vertex)
+    } else {
+        log_error("Failed to create default vertex shader")
+    }
 
-	if pixel, pixel_ok := _compile_shader(shader_data, "default_pixel_shader", ShaderType.Pixel); pixel_ok {
-		app_state.gfx.backend.pixel_shader = _create_pixel_shader_from_blob(pixel)
-	} else {
-		log_error("Failed to create default pixel shader")
-	}
+    if pixel, pixel_ok := _compile_shader(shader_data, "default_pixel_shader", ShaderType.Pixel); pixel_ok {
+        pixel_shader = _create_pixel_shader_from_blob(pixel)
+    } else {
+        log_error("Failed to create default pixel shader")
+    }
 
-    // Draw a frame before displaying the window to prevent a blank frame on start
-    graphics_start_frame()
-    graphics_present_frame()
-    window_show()
+    when IMGUI_ENABLE {
+        // init dear imgui
+        im.CHECKVERSION()
+        im.CreateContext()
+        im.GetIO();
+
+        im_win.Init(window)
+        im_dx.Init(device, device_ctx)
+        im.StyleColorsDark();
+    }
+
+    win.ShowWindow(window, 1)
+    win.UpdateWindow(window)
+}
+
+_graphics_shutdown :: proc() {
+    when IMGUI_ENABLE {
+        im_dx.Shutdown()
+        im_win.Shutdown()
+        im.DestroyContext()
+    }
 }
 
 _setup_buffers :: proc() {
-    app_state.gfx.backend.swapchain->GetBuffer(0, D3D11.ITexture2D_UUID, (^rawptr)(&app_state.gfx.backend.framebuffer))
-	assert(app_state.gfx.backend.framebuffer != nil)
+    frame_buffer:         ^D3D11.ITexture2D
+    swapchain->GetBuffer(0, D3D11.ITexture2D_UUID, (^rawptr)(&frame_buffer))
+    assert(frame_buffer != nil)
+    defer safe_free(frame_buffer)
 
-	app_state.gfx.backend.device->CreateRenderTargetView(app_state.gfx.backend.framebuffer, nil, &app_state.gfx.backend.framebuffer_view)
-    assert(app_state.gfx.backend.framebuffer_view != nil)
+    device->CreateRenderTargetView(frame_buffer, nil, &framebuffer_view)
+    assert(framebuffer_view != nil)
 }
 
 _graphics_resize_buffers :: proc() {
-    safe_free(app_state.gfx.backend.framebuffer)
-    safe_free(app_state.gfx.backend.framebuffer_view)
-    app_state.gfx.backend.swapchain->ResizeBuffers(0, 0, 0, .UNKNOWN, {})
+    safe_free(framebuffer_view)
+    swapchain->ResizeBuffers(0, 0, 0, .UNKNOWN, {})
     _setup_buffers()
+}
+
+@(disabled=!IMGUI_ENABLE)
+_imgui_frame_start :: proc() {
+    im_win.NewFrame()
+    im_dx.NewFrame()
+    im.NewFrame()
+}
+
+@(disabled=!IMGUI_ENABLE)
+_imgui_frame_end :: proc() {
+    im.Render()
+    im_dx.RenderDrawData(im.GetDrawData())
 }
 
 _graphics_start_frame :: proc() {
@@ -470,39 +489,43 @@ _graphics_start_frame :: proc() {
     }
 
     viewport: D3D11.VIEWPORT = { 0, 0, f32(app_state.gfx.window_width), f32(app_state.gfx.window_height), 0, 1}
-	app_state.gfx.backend.device_ctx->RSSetViewports(1, &viewport)
-	app_state.gfx.backend.device_ctx->RSSetState(app_state.gfx.backend.rasterizer_state)
+    device_ctx->RSSetViewports(1, &viewport)
+    device_ctx->RSSetState(rasterizer_state)
 
-	app_state.gfx.backend.device_ctx->ClearRenderTargetView(app_state.gfx.backend.framebuffer_view, &app_state.gfx.frame.clear_color)
+    device_ctx->ClearRenderTargetView(framebuffer_view, &app_state.gfx.frame.clear_color)
     blend_factor :[4]f32 = 1
-    app_state.gfx.backend.device_ctx->OMSetBlendState(app_state.gfx.backend.blend_state, &blend_factor, 0xffffffff)
-	app_state.gfx.backend.device_ctx->OMSetRenderTargets(1, &app_state.gfx.backend.framebuffer_view, nil)
+    device_ctx->OMSetBlendState(blend_state, &blend_factor, 0xffffffff)
+    device_ctx->OMSetRenderTargets(1, &framebuffer_view, nil)
 
     mapped_subresource: D3D11.MAPPED_SUBRESOURCE
-	app_state.gfx.backend.device_ctx->Map(app_state.gfx.backend.vertex_buffer, 0, .WRITE_DISCARD, {}, &mapped_subresource)
-	mem.copy(mapped_subresource.pData, &app_state.gfx.frame.quads[0], size_of(Quad) * app_state.gfx.frame.quad_count)
-	app_state.gfx.backend.device_ctx->Unmap(app_state.gfx.backend.vertex_buffer, 0)
+    device_ctx->Map(vertex_buffer, 0, .WRITE_DISCARD, {}, &mapped_subresource)
+    mem.copy(mapped_subresource.pData, &app_state.gfx.frame.quads[0], size_of(Quad) * app_state.gfx.frame.quad_count)
+    device_ctx->Unmap(vertex_buffer, 0)
 
-    app_state.gfx.backend.device_ctx->IASetPrimitiveTopology(.TRIANGLELIST)
-    app_state.gfx.backend.device_ctx->IASetInputLayout(app_state.gfx.backend.input_layout)
+    device_ctx->IASetPrimitiveTopology(.TRIANGLELIST)
+    device_ctx->IASetInputLayout(input_layout)
 
     stride := u32(size_of(Vertex))
     offset := u32(0)
-    app_state.gfx.backend.device_ctx->IASetVertexBuffers(0, 1, &app_state.gfx.backend.vertex_buffer, &stride, &offset)
-    app_state.gfx.backend.device_ctx->IASetIndexBuffer( app_state.gfx.backend.index_buffer, .R16_UINT, 0)
+    device_ctx->IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &offset)
+    device_ctx->IASetIndexBuffer( index_buffer, .R16_UINT, 0)
 
-    app_state.gfx.backend.device_ctx->VSSetShader( app_state.gfx.backend.vertex_shader, nil, 0)
-    app_state.gfx.backend.device_ctx->PSSetShader( app_state.gfx.backend.pixel_shader, nil, 0)
+    device_ctx->VSSetShader( vertex_shader, nil, 0)
+    device_ctx->PSSetShader( pixel_shader, nil, 0)
 
-    app_state.gfx.backend.device_ctx->PSSetShaderResources(0, 1, &app_state.gfx.backend.main_texture.texture_view)
-    app_state.gfx.backend.device_ctx->PSSetSamplers(0, 1, &app_state.gfx.backend.sampler_state)
+    device_ctx->PSSetShaderResources(0, 1, &main_texture.texture_view)
+    device_ctx->PSSetSamplers(0, 1, &sampler_state)
+
+    _imgui_frame_start()
 }
 
 _graphics_present_frame :: proc() {
     if app_state.gfx.frame.quad_count > 0 {
-        app_state.gfx.backend.device_ctx->DrawIndexed(u32(6 * app_state.gfx.frame.quad_count), 0, 0)
+        device_ctx->DrawIndexed(u32(6 * app_state.gfx.frame.quad_count), 0, 0)
     }
-    app_state.gfx.backend.swapchain->Present(1, {})
+
+    _imgui_frame_end()
+    swapchain->Present(1, {})
 }
 
 _upload_texture :: proc(texture_data: rawptr, width, height: int, mips: u32 = 1) -> (DX11Texture, bool) {
@@ -523,23 +546,21 @@ _upload_texture :: proc(texture_data: rawptr, width, height: int, mips: u32 = 1)
     }
 
     texture: ^D3D11.ITexture2D
-    tex_res := app_state.gfx.backend.device->CreateTexture2D(&texture_desc, &texture_data, &texture)
+    tex_res := device->CreateTexture2D(&texture_desc, &texture_data, &texture)
 
     if tex_res != 0 {
-        error_msg := _get_d3d_error_message(tex_res)
-        log_error(fmt.tprintf("Failed to create texture. Error: %s (HRESULT: 0x%x)", error_msg, tex_res))
+        log_error(fmt.tprintf("Failed to create texture."))
         return {}, false
     }
 
     texture_view: ^D3D11.IShaderResourceView
-    tex_view_res := app_state.gfx.backend.device->CreateShaderResourceView(texture, nil, &texture_view)
+    tex_view_res := device->CreateShaderResourceView(texture, nil, &texture_view)
 
     if tex_view_res != 0 {
         if texture != nil {
             safe_free(texture)
         }
-        error_msg := _get_d3d_error_message(tex_view_res)
-        log_error(fmt.tprintf("Failed to create texture view. Error: %s (HRESULT: 0x%x)", error_msg, tex_view_res))
+        log_error(fmt.tprintf("Failed to create texture view."))
         return {}, false
     }
 
@@ -550,8 +571,8 @@ _upload_texture :: proc(texture_data: rawptr, width, height: int, mips: u32 = 1)
 
 
 _compile_shader :: proc {
-	_compile_shader_from_path,
-	_compile_shader_from_bytes,
+    _compile_shader_from_path,
+    _compile_shader_from_bytes,
 }
 
 _compile_shader_from_path :: proc(path: string, shader_type: ShaderType) -> (shader_blob: ^D3D.ID3DBlob, ok: bool) {
@@ -592,128 +613,127 @@ _compile_shader_from_bytes :: proc(data: []u8, name: string, shader_type: Shader
         error_blob->Release()
         log_error("Failed to compile shader: %v", error_message)
     } else {
-    	log_info("Successfully compiled %v shader: %v", shader_type, name)
+        log_info("Successfully compiled %v shader: %v", shader_type, name)
     }
     return
 }
 
 _create_pixel_shader_from_blob :: proc(shader_blob: ^D3D.ID3DBlob) -> ^D3D11.IPixelShader {
-	pixel_shader: ^D3D11.IPixelShader
-	pixel_result := app_state.gfx.backend.device->CreatePixelShader(shader_blob->GetBufferPointer(), shader_blob->GetBufferSize(), nil, &pixel_shader)
+    shader: ^D3D11.IPixelShader
+    pixel_result := device->CreatePixelShader(shader_blob->GetBufferPointer(), shader_blob->GetBufferSize(), nil, &shader)
 
-	if pixel_result != 0 {
-		log_error("Failed to create pixel shader: %v", shader_blob)
-	} else {
-		log_info("Created pixel shader: %v", shader_blob)
-	}
-	return pixel_shader
+    if pixel_result != 0 {
+        log_error("Failed to create pixel shader: %v", shader_blob)
+    } else {
+        log_info("Created pixel shader: %v", shader_blob)
+    }
+    return shader
 }
 
 _create_vertex_shader_from_blob :: proc(shader_blob: ^D3D.ID3DBlob) -> (^D3D11.IVertexShader, ^D3D11.IInputLayout) {
-	vertex_shader: ^D3D11.IVertexShader
-	vertex_result := app_state.gfx.backend.device->CreateVertexShader(shader_blob->GetBufferPointer(), shader_blob->GetBufferSize(), nil, &vertex_shader)
+    shader: ^D3D11.IVertexShader
+    vertex_result := device->CreateVertexShader(shader_blob->GetBufferPointer(), shader_blob->GetBufferSize(), nil, &shader)
 
-	if vertex_result != 0 {
-		log_error("Failed to create vertex shader: %v", shader_blob)
-	} else {
+    if vertex_result != 0 {
+        log_error("Failed to create vertex shader: %v", shader_blob)
+    } else {
         log_info("Created vertex shader: %v", shader_blob)
     }
 
-    input_layout, input_result := _generate_input_layout(shader_blob)
-	if input_result != 0 {
-		log_error("Failed to create input layout from vertex shader: %v with result %0x", shader_blob, input_result)
-	} else {
-		log_info("Created input layout from vertex shader: %v", shader_blob)
-	}
-	return vertex_shader, input_layout
+    layout, input_result := _generate_input_layout(shader_blob)
+    if input_result != 0 {
+        log_error("Failed to create input layout from vertex shader: %v with result %0x", shader_blob, input_result)
+    } else {
+        log_info("Created input layout from vertex shader: %v", shader_blob)
+    }
+    return shader, layout
 }
 
 // Generates a input layout directly from the shader data rather than manually authoring one on the odin side for every shader
 _generate_input_layout :: proc (vertex_shader_blob: ^D3D11.IBlob) -> (^D3D11.IInputLayout, D3D11.HRESULT) {
-	IShaderReflectionType_UUID_STRING :: "8d536ca1-0cca-4956-a837-786963755584"
-	IShaderReflectionType_UUID := &D3D.IID{0x8d536ca1, 0x0cca, 0x4956, {0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84}}
+    IShaderReflectionType_UUID_STRING :: "8d536ca1-0cca-4956-a837-786963755584"
+    IShaderReflectionType_UUID := &D3D.IID{0x8d536ca1, 0x0cca, 0x4956, {0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84}}
 
-	vertex_shader_reflection: ^D3D11.IShaderReflection
-	reflect_result := D3D.Reflect(vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), IShaderReflectionType_UUID, (^rawptr)(&vertex_shader_reflection))
+    vertex_shader_reflection: ^D3D11.IShaderReflection
+    reflect_result := D3D.Reflect(vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), IShaderReflectionType_UUID, (^rawptr)(&vertex_shader_reflection))
 
-	if reflect_result != 0 {
-		log_error("Failed to reflect vertex shader")
-		return nil, reflect_result
-	}
+    if reflect_result != 0 {
+        log_error("Failed to reflect vertex shader")
+        return nil, reflect_result
+    }
 
-	defer if vertex_shader_reflection != nil {
-		vertex_shader_reflection->Release()
-	}
+    defer if vertex_shader_reflection != nil {
+        vertex_shader_reflection->Release()
+    }
 
-	// get the description of the input layout
-	input_layout_desc: D3D11.SHADER_DESC
-	desc_result := vertex_shader_reflection->GetDesc(&input_layout_desc)
+    // get the description of the input layout
+    input_layout_desc: D3D11.SHADER_DESC
+    desc_result := vertex_shader_reflection->GetDesc(&input_layout_desc)
 
-	if desc_result != 0 {
-		log_error("Failed to get input layout description")
-		return nil, desc_result
-	}
+    if desc_result != 0 {
+        log_error("Failed to get input layout description")
+        return nil, desc_result
+    }
 
-	desc := make([]D3D11.INPUT_ELEMENT_DESC, (int)(input_layout_desc.InputParameters))
-	defer delete(desc)
+    desc := make([]D3D11.INPUT_ELEMENT_DESC, (int)(input_layout_desc.InputParameters))
+    defer delete(desc)
 
-	// get the description of each input element
-	for i in 0..<len(desc) {
-		signature_parameter_desc: D3D11.SIGNATURE_PARAMETER_DESC
-		param_desc_result := vertex_shader_reflection->GetInputParameterDesc(u32(i), &signature_parameter_desc)
+    // get the description of each input element
+    for i in 0..<len(desc) {
+        signature_parameter_desc: D3D11.SIGNATURE_PARAMETER_DESC
+        param_desc_result := vertex_shader_reflection->GetInputParameterDesc(u32(i), &signature_parameter_desc)
 
-		if param_desc_result != 0 {
-			log_error("Failed to get input element description")
-			return nil, param_desc_result
-		}
+        if param_desc_result != 0 {
+            log_error("Failed to get input element description")
+            return nil, param_desc_result
+        }
 
-		input_element_desc: D3D11.INPUT_ELEMENT_DESC
+        input_element_desc: D3D11.INPUT_ELEMENT_DESC
 
-		input_element_desc.SemanticName         = signature_parameter_desc.SemanticName
-		input_element_desc.SemanticIndex        = signature_parameter_desc.SemanticIndex
-		input_element_desc.InputSlot            = 0
-		input_element_desc.AlignedByteOffset    = D3D11.APPEND_ALIGNED_ELEMENT
-		input_element_desc.InputSlotClass       = .VERTEX_DATA
-		input_element_desc.InstanceDataStepRate = 0
+        input_element_desc.SemanticName         = signature_parameter_desc.SemanticName
+        input_element_desc.SemanticIndex        = signature_parameter_desc.SemanticIndex
+        input_element_desc.InputSlot            = 0
+        input_element_desc.AlignedByteOffset    = D3D11.APPEND_ALIGNED_ELEMENT
+        input_element_desc.InputSlotClass       = .VERTEX_DATA
+        input_element_desc.InstanceDataStepRate = 0
 
-		if signature_parameter_desc.Mask == 1 {
-			#partial switch signature_parameter_desc.ComponentType {
-				case .FLOAT32: input_element_desc.Format = .R32_FLOAT
-				case .SINT32:  input_element_desc.Format = .R32_SINT
-				case .UINT32:  input_element_desc.Format = .R32_UINT
-			}
-		} else if signature_parameter_desc.Mask <= 3 {
-			#partial switch signature_parameter_desc.ComponentType {
-				case .FLOAT32: input_element_desc.Format = .R32G32_FLOAT
-				case .SINT32:  input_element_desc.Format = .R32G32_SINT
-				case .UINT32:  input_element_desc.Format = .R32G32_UINT
-			}
-		} else if signature_parameter_desc.Mask <= 7 {
-			#partial switch signature_parameter_desc.ComponentType {
-				case .FLOAT32: input_element_desc.Format = .R32G32B32_FLOAT
-				case .SINT32:  input_element_desc.Format = .R32G32B32_SINT
-				case .UINT32:  input_element_desc.Format = .R32G32B32_UINT
-			}
-		} else if signature_parameter_desc.Mask <= 15 {
-			#partial switch signature_parameter_desc.ComponentType {
-				case .FLOAT32: input_element_desc.Format = .R32G32B32A32_FLOAT
-				case .SINT32:  input_element_desc.Format = .R32G32B32A32_SINT
-				case .UINT32:  input_element_desc.Format = .R32G32B32A32_UINT
-			}
-		}
+        if signature_parameter_desc.Mask == 1 {
+            #partial switch signature_parameter_desc.ComponentType {
+                case .FLOAT32: input_element_desc.Format = .R32_FLOAT
+                case .SINT32:  input_element_desc.Format = .R32_SINT
+                case .UINT32:  input_element_desc.Format = .R32_UINT
+            }
+        } else if signature_parameter_desc.Mask <= 3 {
+            #partial switch signature_parameter_desc.ComponentType {
+                case .FLOAT32: input_element_desc.Format = .R32G32_FLOAT
+                case .SINT32:  input_element_desc.Format = .R32G32_SINT
+                case .UINT32:  input_element_desc.Format = .R32G32_UINT
+            }
+        } else if signature_parameter_desc.Mask <= 7 {
+            #partial switch signature_parameter_desc.ComponentType {
+                case .FLOAT32: input_element_desc.Format = .R32G32B32_FLOAT
+                case .SINT32:  input_element_desc.Format = .R32G32B32_SINT
+                case .UINT32:  input_element_desc.Format = .R32G32B32_UINT
+            }
+        } else if signature_parameter_desc.Mask <= 15 {
+            #partial switch signature_parameter_desc.ComponentType {
+                case .FLOAT32: input_element_desc.Format = .R32G32B32A32_FLOAT
+                case .SINT32:  input_element_desc.Format = .R32G32B32A32_SINT
+                case .UINT32:  input_element_desc.Format = .R32G32B32A32_UINT
+            }
+        }
 
-		desc[i] = input_element_desc
-	}
+        desc[i] = input_element_desc
+    }
 
-	input_layout: ^D3D11.IInputLayout
-	input_layout_result := app_state.gfx.backend.device->CreateInputLayout(&desc[0], u32(len(desc)), vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), &input_layout)
+    input_layout_result := device->CreateInputLayout(&desc[0], u32(len(desc)), vertex_shader_blob->GetBufferPointer(), vertex_shader_blob->GetBufferSize(), &input_layout)
 
-	if input_layout_result != 0 {
-		log_error("Failed to create input layout")
-		return nil, input_layout_result
-	}
+    if input_layout_result != 0 {
+        log_error("Failed to create input layout")
+        return nil, input_layout_result
+    }
 
-	return input_layout, input_layout_result
+    return input_layout, input_layout_result
 }
 
 @(private="file")
@@ -998,21 +1018,4 @@ WinKeyCode :: enum u32 {
     Zoom = 0xFB,
     PA1 = 0xFD,
     OEMClear = 0xFE,
-}
-
-_get_d3d_error_message :: proc(hr: win.HRESULT) -> string {
-    switch i64(hr) {
-    case win.E_INVALIDARG:
-        return "Invalid argument"
-    case i64(win.E_OUTOFMEMORY):
-        return "Out of memory"
-    case i64(win.E_NOTIMPL):
-        return "Not implemented"
-    case i64(win.E_FAIL):
-        return "Unspecified failure"
-    case i64(win.E_NOINTERFACE):
-        return "No interface"
-    case:
-        return fmt.tprintf("Unknown error (HRESULT: 0x%x)", hr)
-    }
 }
