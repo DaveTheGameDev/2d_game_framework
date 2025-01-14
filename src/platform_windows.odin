@@ -136,11 +136,16 @@ process_raw_input :: proc(lParam: win.LPARAM) {
 
     point: win.POINT
     if win.GetCursorPos(&point) {
-        app_state.input.mouse_position = {int(point.x), int(point.y)}
+        // Convert screen coordinates to client coordinates
+        window_handle := win.GetActiveWindow() // or store your window handle somewhere
+        if win.ScreenToClient(window_handle, &point) {
+            app_state.input.mouse_position = {int(point.x), int(point.y)}
+        } else {
+            app_state.input.mouse_position = {-1, -1}
+        }
     } else {
-        app_state.input.mouse_position = -1
+        app_state.input.mouse_position = {-1, -1}
     }
-
     dwSize: u32
     win.GetRawInputData(win.HRAWINPUT(lParam), win.RID_INPUT, nil, &dwSize, size_of(win.RAWINPUTHEADER))
     data := lpb_buffer[:dwSize]
@@ -510,8 +515,8 @@ _graphics_start_frame :: proc() {
     device_ctx->IASetVertexBuffers(0, 1, &vertex_buffer, &stride, &offset)
     device_ctx->IASetIndexBuffer( index_buffer, .R16_UINT, 0)
 
-    device_ctx->VSSetShader( vertex_shader, nil, 0)
-    device_ctx->PSSetShader( pixel_shader, nil, 0)
+    device_ctx->VSSetShader(vertex_shader, nil, 0)
+    device_ctx->PSSetShader(pixel_shader, nil, 0)
 
     device_ctx->PSSetShaderResources(0, 1, &main_texture.texture_view)
     device_ctx->PSSetSamplers(0, 1, &sampler_state)

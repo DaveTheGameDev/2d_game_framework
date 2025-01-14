@@ -24,16 +24,16 @@ Vertex :: struct #align(16) {
     col:          Color,
     uv:           Vec2,
     col_override: Color,
-    tex_index:      u8,
+    tex_index:    u8,
 }
 
 app_state: App_State
 
 App_State :: struct {
-    input: Input_State,
-    gfx:   Graphics_State,
+    input:    Input_State,
+    gfx:      Graphics_State,
     odin_ctx: runtime.Context,
-    running: bool,
+    running:  bool,
 }
 
 Input_State :: struct {
@@ -46,8 +46,8 @@ Input_State :: struct {
 
 Camera :: struct {
     pos:  Vec2,
+    res:  Vec2,
     zoom: f32,
-    res:  Vec2
 }
 
 Graphics_State :: struct {
@@ -89,13 +89,11 @@ Origin :: enum {
     Bottom_Left,
 }
 
-
 MessageBoxType :: enum {
     Info,
     Warning,
     Error,
 }
-
 
 ShaderType :: enum {
     Vertex,
@@ -106,7 +104,6 @@ ShaderType :: enum {
     Compute,
     Mesh,
 }
-
 
 // HELPERS
 ctstr :: fmt.ctprintf
@@ -159,6 +156,70 @@ scale_from_pivot :: proc(pivot: Pivot) -> Vec2 {
 	}
 }
 
+screen_width :: proc() -> f32 {
+    return f32(app_state.gfx.screen_width)
+}
+
+screen_height :: proc() -> f32 {
+    return f32(app_state.gfx.screen_height)
+}
+
+screen_width_i :: proc() -> int {
+    return app_state.gfx.screen_width
+}
+
+screen_height_i :: proc() -> int {
+    return app_state.gfx.screen_width
+}
+
+window_width :: proc() -> f32 {
+    return f32(app_state.gfx.window_width)
+}
+
+window_height :: proc() -> f32 {
+    return f32(app_state.gfx.window_height)
+}
+
+window_width_i :: proc() -> int {
+    return app_state.gfx.window_width
+}
+
+window_height_i :: proc() -> int {
+    return app_state.gfx.window_width
+}
+
+@(require_results)
+mouse_pos_screen :: proc() -> Vec2 {
+    m_pos := app_state.input.mouse_position
+    return {f32(m_pos.x), f32(m_pos.y)}
+}
+
+@(require_results)
+to_world_space :: proc(screen_pos: Vec2) -> Vec2 {
+    if app_state.gfx.frame.projection == 0 {
+        log_error("no projection matrix set yet")
+        return screen_pos
+    }
+
+    ndc_x, ndc_y: f32
+    switch app_state.gfx.frame.draw_origin {
+    case .Center:
+        ndc_x = (screen_pos.x / (window_width()  * 0.5)) - 1.0
+        ndc_y = (screen_pos.y / (window_height() * 0.5)) - 1.0
+        ndc_y *= -1
+    case .Bottom_Left:
+        ndc_x = screen_pos.x / screen_width()
+        ndc_y = 1.0 - (screen_pos.y / screen_height())
+    }
+
+    pos_ndc := Vec2{ndc_x, ndc_y}
+    pos_world := Vec4{pos_ndc.x, pos_ndc.y, 0, 1}
+
+    pos_world *= linalg.inverse(app_state.gfx.frame.projection)
+    pos_world = app_state.gfx.frame.camera_xform * pos_world
+
+    return pos_world.xy
+}
 
 // COLOR
 Color :: [4]f32
@@ -359,6 +420,7 @@ set_camera :: proc(pos: Vec2, zoom: f32, res := Vec2{}, origin: Origin = .Center
         height = width / window_aspect
     }
 
+    // The projection matrix setup is correct
     switch origin {
     case .Center:
         app_state.gfx.frame.projection = Ortho(-width * 0.5, width * 0.5, -height * 0.5, height * 0.5, -1, 1)
@@ -366,9 +428,10 @@ set_camera :: proc(pos: Vec2, zoom: f32, res := Vec2{}, origin: Origin = .Center
         app_state.gfx.frame.projection = Ortho(0, width, 0, height, -1, 1)
     }
 
+    // Correct the camera transform
     app_state.gfx.frame.camera_xform = 1
-    app_state.gfx.frame.camera_xform *= xform_translate(pos)
-    app_state.gfx.frame.camera_xform *= xform_scale(Vec2{1, 1}) // Remove zoom from here
+    app_state.gfx.frame.camera_xform *= xform_translate(-pos)
+    app_state.gfx.frame.camera_xform *= xform_scale(Vec2{1/zoom, 1/zoom})
 }
 
 draw_sprite :: proc(pos: Vec2, img_id: Image_Name, pivot:= Pivot.bottom_center, color:=COLOR_WHITE, color_override:=COLOR_ZERO) {
