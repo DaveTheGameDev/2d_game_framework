@@ -9,6 +9,14 @@ import "core:strings"
 import "core:os"
 import "core:mem"
 
+import "core:bytes"
+import "core:image"
+import "core:image/qoi"
+import "core:image/png"
+
+_ :: qoi
+_ :: png
+
 main :: proc() {
     if !os.exists("bin") {
         os.make_directory("bin")
@@ -49,13 +57,14 @@ generate_image_info :: proc(images: [dynamic]Image, output_file: string) {
     strings.write_string(&sb, "Image_Info :: struct {\n")
     strings.write_string(&sb, "    width:  i32,\n")
     strings.write_string(&sb, "    height: i32,\n")
-    strings.write_string(&sb, "    uv:     Vec4,\n")
+    strings.write_string(&sb, "    uv:     vec4,\n")
     strings.write_string(&sb, "}\n\n")
 
     // Generate image enum
     strings.write_string(&sb, "Image_Name :: enum {\n")
     strings.write_string(&sb, "    nil,\n")
     strings.write_string(&sb, "    font,\n")
+    strings.write_string(&sb, "    render_tex,\n")
     for img in images {
         strings.write_string(&sb, fmt.tprintf("    %s,\n", img.name))
     }
@@ -65,6 +74,7 @@ generate_image_info :: proc(images: [dynamic]Image, output_file: string) {
     strings.write_string(&sb, "IMAGE_INFO := [Image_Name]Image_Info{\n")
     strings.write_string(&sb, "    .nil = {},\n")
     strings.write_string(&sb, "    .font = {},\n")
+    strings.write_string(&sb, "    .render_tex = {},\n")
     for img in images {
         strings.write_string(&sb, fmt.tprintf("    .%s = {{width = %d, height = %d, uv = {{%f, %f, %f, %f}}}},\n",
             img.name, img.width, img.height, img.uv.x, img.uv.y, img.uv.z, img.uv.w))
@@ -205,24 +215,15 @@ Coord :: stbrp.Coord
         img.data = nil
     }
 
-    stbi.write_png("bin/res/img/atlas.png", auto_cast atlas_width, auto_cast atlas_height, 4, raw_data(atlas_data), 4 * auto_cast atlas_width)
 
-    // // Save individual images for debugging
-    // for rect in rects {
-    //     img := &images[rect.id]
-    //     rect_w := int(rect.w) - 2
-    //     rect_h := int(rect.h) - 2
-    //     img_data := make([]byte, rect_w * rect_h * 4)
-    //     defer delete(img_data)
 
-    //     for row in 0..<rect_h {
-    //         src_row := &atlas_data[((int(rect.y) + 1 + row) * atlas_width + int(rect.x) + 1) * 4]
-    //         dest_row := &img_data[row * rect_w * 4]
-    //         mem.copy(dest_row, src_row, rect_w * 4)
-    //     }
-
-    //     stbi.write_png(fmt.ctprintf("bin/res/img/debug_image_%s.png", img.name), auto_cast rect_w, auto_cast rect_h, 4, raw_data(img_data), 4 * auto_cast rect_w)
+    // if img, err := image.load_from_bytes(atlas_data, {.do_not_decompress_image}, context.temp_allocator); err == nil {
+    //     buffer: bytes.Buffer
+    //     bytes.buffer_init_allocator(&buffer, len(atlas_data), len(atlas_data), context.temp_allocator)
+    // } else {
+    //     ensure(false)
     // }
 
+    stbi.write_png("bin/res/img/atlas.png", auto_cast atlas_width, auto_cast atlas_height, 4, raw_data(atlas_data), 4 * auto_cast atlas_width)
     delete(rects)
 }

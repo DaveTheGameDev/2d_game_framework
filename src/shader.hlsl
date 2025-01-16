@@ -3,7 +3,7 @@ struct VS_INPUT {
     float4 col          : COL;
     float2 uv           : UV;
     float4 col_override : COL_OVERRIDE;
-    uint tex_index        : BYTES;
+    uint tex_index      : BYTES;
 };
 
 struct PS_INPUT {
@@ -11,12 +11,21 @@ struct PS_INPUT {
     float4 col          : COL;
     float2 uv           : UV;
     float4 col_override : COL_OVERRIDE;
-    uint tex_index        : BYTES;
+    uint tex_index      : BYTES;
 };
 
-Texture2D mainAtlas       : register(t0);
-Texture2D fontAtlas       : register(t1);
+Texture2D mainAtlas     : register(t0);
+Texture2D fontAtlas     : register(t1);
+Texture2D renderTexture : register(t2);
+
 SamplerState samplerState : register(s0);
+SamplerState nullsampler  : register(s1);
+
+cbuffer ScissorData : register(b0)
+{
+    float4 scissorRect;
+    float2 screenRes;
+}
 
 PS_INPUT vs_main(VS_INPUT input) {
     PS_INPUT output;
@@ -36,6 +45,8 @@ float4 ps_main(PS_INPUT input) : SV_TARGET {
         tex_col = mainAtlas.Sample(samplerState, input.uv);
     } else if (input.tex_index == 1) {
         tex_col.a = fontAtlas.Sample(samplerState, input.uv).r;
+    } else if (input.tex_index == 2) {
+        tex_col = renderTexture.Sample(samplerState, input.uv);
     } else if (input.tex_index == 255) {
         return col_out;
     }
@@ -46,4 +57,3 @@ float4 ps_main(PS_INPUT input) : SV_TARGET {
 
     return col_out;
 }
-

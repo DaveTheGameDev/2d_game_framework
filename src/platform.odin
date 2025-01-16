@@ -11,18 +11,24 @@ import "core:os"
 import "core:log"
 import "base:runtime"
 
-import stbi  "vendor:stb/image"
+import "core:bytes"
+import "core:image"
+import "core:image/qoi"
+import "core:image/png"
+
+_ :: qoi
+_ :: png
 
 PROFILE_ENABLE :: #config(PROFILE_ENABLE, false)
-IMGUI_ENABLE :: #config(IMGUI_ENABLE, false)
+IMGUI_ENABLE   :: #config(IMGUI_ENABLE, false)
 
 MAX_QUADS :: 8192
 Quad      :: distinct [4]Vertex
 
 Vertex :: struct #align(16) {
-    pos:          Vec2,
+    pos:          vec2,
     col:          Color,
-    uv:           Vec2,
+    uv:           vec2,
     col_override: Color,
     tex_index:    u8,
 }
@@ -45,8 +51,8 @@ Input_State :: struct {
 }
 
 Camera :: struct {
-    pos:  Vec2,
-    res:  Vec2,
+    pos:  vec2,
+    res:  vec2,
     zoom: f32,
 }
 
@@ -64,8 +70,8 @@ Graphics_State :: struct {
         quads:        [MAX_QUADS]Quad,
         clear_color:  Color,
         quad_count:   int,
-        projection:   Mat4,
-        camera_xform: Mat4,
+        projection:   mat4,
+        camera_xform: mat4,
         camera:       Camera,
         draw_origin:  Origin,
     }
@@ -121,27 +127,27 @@ log_error :: log.errorf
 printf    :: fmt.printfln
 
 // MATH
-Vec2  :: [2]f32
-Vec3  :: [3]f32
-Vec4  :: [4]f32
-Mat4  :: linalg.Matrix4f32
-Ortho :: linalg.matrix_ortho3d_f32
+vec2  :: [2]f32
+vec3  :: [3]f32
+vec4  :: [4]f32
+mat4  :: linalg.Matrix4f32
+mat4_ortho :: linalg.matrix_ortho3d_f32
 
-DEFAULT_UV :: Vec4{0, 0, 1, 1}
+DEFAULT_UV :: vec4{0, 0, 1, 1}
 
-xform_translate :: proc(pos: Vec2) -> Mat4 {
+xform_translate :: proc(pos: vec2) -> mat4 {
     return linalg.matrix4_translate_f32({pos.x, pos.y, 0})
 }
 
-xform_rotate :: proc(angle: f32) -> Mat4 {
+xform_rotate :: proc(angle: f32) -> mat4 {
     return linalg.matrix4_rotate_f32(math.to_radians(angle), {0, 0, 1})
 }
 
-xform_scale :: proc(scale: Vec2) -> Mat4 {
-    return linalg.matrix4_scale_f32(Vec3{scale.x, scale.y, 1})
+xform_scale :: proc(scale: vec2) -> mat4 {
+    return linalg.matrix4_scale_f32(vec3{scale.x, scale.y, 1})
 }
 
-scale_from_pivot :: proc(pivot: Pivot) -> Vec2 {
+scale_from_pivot :: proc(pivot: Pivot) -> vec2 {
 	switch pivot {
 		case .bottom_left:   return {0.0, 0.0}
 		case .bottom_center: return {0.5, 0.0}
@@ -189,13 +195,13 @@ window_height_i :: proc() -> int {
 }
 
 @(require_results)
-mouse_pos_screen :: proc() -> Vec2 {
+mouse_pos_screen :: proc() -> vec2 {
     m_pos := app_state.input.mouse_position
     return {f32(m_pos.x), f32(m_pos.y)}
 }
 
 @(require_results)
-to_world_space :: proc(screen_pos: Vec2) -> Vec2 {
+to_world_space :: proc(screen_pos: vec2) -> vec2 {
     if app_state.gfx.frame.projection == 0 {
         log_error("no projection matrix set yet")
         return screen_pos
@@ -212,8 +218,8 @@ to_world_space :: proc(screen_pos: Vec2) -> Vec2 {
         ndc_y = 1.0 - (screen_pos.y / screen_height())
     }
 
-    pos_ndc := Vec2{ndc_x, ndc_y}
-    pos_world := Vec4{pos_ndc.x, pos_ndc.y, 0, 1}
+    pos_ndc := vec2{ndc_x, ndc_y}
+    pos_world := vec4{pos_ndc.x, pos_ndc.y, 0, 1}
 
     pos_world *= linalg.inverse(app_state.gfx.frame.projection)
     pos_world = app_state.gfx.frame.camera_xform * pos_world
@@ -302,11 +308,13 @@ main :: proc() {
 
     window_open(GAME_TITLE)
 
-    data, width, height, ok := load_image("res/img/atlas.png")
-    ensure(ok, "Failed to load new texture atlas")
+    image, ok := load_image("res/img/atlas.png", context.temp_allocator)
+    ensure(ok == nil, fmt.tprintf("Failed to load texture atlas. Error: {}", ok))
 
-    main_texture, ok  = _upload_texture(&data[0], width, height)
-    ensure(ok, "Failed to upload texture atlas")
+    pixels  := bytes.buffer_to_bytes(&image.pixels)
+    texture, upload_ok := _upload_texture(&pixels[0], image.width, image.height)
+    ensure(upload_ok, "Failed to upload texture atlas")
+    atlas_texture = texture
 
     game_init()
 
@@ -315,6 +323,8 @@ main :: proc() {
         dt := f32(time.duration_seconds(time.since(last_frame_time)))
         dt = math.clamp(dt, 0.0, 1.0)
         last_frame_time = time.now()
+
+        window_poll()
 
         gameplay_update_scope: {
             PROFILE("Game Update")
@@ -326,35 +336,25 @@ main :: proc() {
             game_draw(dt)
         }
 
-        frame_start()
+        graphics_start_frame()
+
         game_imgui_frame(dt)
-        frame_end()
+
+        graphics_present_frame()
+        reset_input_state()
+
         app_state.gfx.frame = {}
+        free_all(context.temp_allocator)
     }
-}
-
-frame_start :: proc() {
-    PROFILE(#procedure)
-    window_poll()
-    graphics_start_frame()
-}
-
-frame_end :: proc() {
-    PROFILE(#procedure)
-    graphics_present_frame()
-    reset_input_state()
-    free_all(context.temp_allocator)
 }
 
 quit :: proc() {
     app_state.running = false
 }
 
-when PROFILE_ENABLE {
     spall_ctx: spall.Context
     spall_buffer_backing: []u8
     spall_buffer: spall.Buffer
-}
 
 @(deferred_in=_profile_buffer_end)
 @(disabled=!PROFILE_ENABLE)
@@ -389,6 +389,10 @@ window_set_fullscreen :: proc(fullscreen: bool) {
     _window_set_fullscreen(fullscreen)
 }
 
+cursor_show  :: proc(show: bool) {
+    _cursor_show(show)
+}
+
 // GRAPHICS
 graphics_start_frame :: proc() {
     PROFILE(#procedure)
@@ -400,7 +404,7 @@ graphics_present_frame :: proc() {
     _graphics_present_frame()
 }
 
-set_camera :: proc(pos: Vec2, zoom: f32, res := Vec2{}, origin: Origin = .Center) {
+set_camera :: proc(pos: vec2, zoom: f32, res := vec2{}, origin: Origin = .Center) {
     app_state.gfx.frame.camera.pos = pos
     render_res := res
 
@@ -420,25 +424,23 @@ set_camera :: proc(pos: Vec2, zoom: f32, res := Vec2{}, origin: Origin = .Center
         height = width / window_aspect
     }
 
-    // The projection matrix setup is correct
     switch origin {
     case .Center:
-        app_state.gfx.frame.projection = Ortho(-width * 0.5, width * 0.5, -height * 0.5, height * 0.5, -1, 1)
+        app_state.gfx.frame.projection = mat4_ortho(-width * 0.5, width * 0.5, -height * 0.5, height * 0.5, -1, 1)
     case .Bottom_Left:
-        app_state.gfx.frame.projection = Ortho(0, width, 0, height, -1, 1)
+        app_state.gfx.frame.projection = mat4_ortho(0, width, 0, height, -1, 1)
     }
 
-    // Correct the camera transform
     app_state.gfx.frame.camera_xform = 1
     app_state.gfx.frame.camera_xform *= xform_translate(-pos)
-    app_state.gfx.frame.camera_xform *= xform_scale(Vec2{1/zoom, 1/zoom})
+    app_state.gfx.frame.camera_xform *= xform_scale(vec2{1/zoom, 1/zoom})
 }
 
-draw_sprite :: proc(pos: Vec2, img_id: Image_Name, pivot:= Pivot.bottom_center, color:=COLOR_WHITE, color_override:=COLOR_ZERO) {
+draw_sprite :: proc(pos: vec2, img_id: Image_Name, pivot:= Pivot.bottom_center, color:=COLOR_WHITE, color_override:=COLOR_ZERO) {
 	image := IMAGE_INFO[img_id]
-	size := Vec2{f32(image.width), f32(image.height)}
+	size := vec2{f32(image.width), f32(image.height)}
 
-	xform0 := Mat4(1)
+	xform0 := mat4(1)
 	xform0 *= xform_translate(pos)
 	xform0 *= xform_translate(size * -scale_from_pivot(pivot))
 
@@ -447,18 +449,18 @@ draw_sprite :: proc(pos: Vec2, img_id: Image_Name, pivot:= Pivot.bottom_center, 
 
 draw_sprite_in_rect :: proc(rect: Rect, img_id: Image_Name, pivot := Pivot.center, color := COLOR_WHITE, color_override := COLOR_ZERO) {
     image := IMAGE_INFO[img_id]
-    img_size := Vec2{auto_cast image.width, auto_cast image.height}
-    rect_size := Vec2{rect.width, rect.height}
+    img_size := vec2{auto_cast image.width, auto_cast image.height}
+    rect_size := vec2{rect.width, rect.height}
 
     // Calculate scale to fit the image within the rect while maintaining aspect ratio
     scale := min(rect_size.x / img_size.x, rect_size.y / img_size.y)
     scaled_size := img_size * scale
 
     // Calculate position to center the scaled image within the rect
-    pos := Vec2{rect.x, rect.y} + (rect_size - scaled_size) * 0.5
+    pos := vec2{rect.x, rect.y} + (rect_size - scaled_size) * 0.5
 
     // Create transformation matrix
-    xform := Mat4(1)
+    xform := mat4(1)
     xform *= xform_translate({pos.x, pos.y})
     xform *= xform_scale(scale)
     xform *= xform_translate(img_size * -scale_from_pivot(pivot))
@@ -469,18 +471,18 @@ draw_sprite_in_rect :: proc(rect: Rect, img_id: Image_Name, pivot := Pivot.cente
 
 draw_rect :: proc(rect: Rect, pivot: Pivot, color: Color, color_override:=COLOR_ZERO, uv:=DEFAULT_UV,  img_id: Image_Name= .nil) {
     PROFILE(#procedure)
-    xform := linalg.matrix4_translate(Vec3{rect.x, rect.y, 0})
+    xform := linalg.matrix4_translate(vec3{rect.x, rect.y, 0})
 	xform *= xform_translate({rect.width, rect.height} * -scale_from_pivot(pivot))
 	draw_rect_matrix(xform, {rect.width, rect.height}, color, color_override, uv, img_id)
 }
 
-draw_rect_matrix :: proc(xform: Mat4, size: Vec2, color: Color, color_override:=COLOR_ZERO, uv:=DEFAULT_UV, img_id: Image_Name= .nil) {
+draw_rect_matrix :: proc(xform: mat4, size: vec2, color: Color, color_override:=COLOR_ZERO, uv:=DEFAULT_UV, img_id: Image_Name= .nil) {
     draw_rect_projected(app_state.gfx.frame.projection * linalg.inverse(app_state.gfx.frame.camera_xform) * xform, size, color, color_override, uv, img_id)
 }
 
 draw_rect_projected :: proc(
-    world_to_clip: Mat4,
-    size:          Vec2,
+    world_to_clip: mat4,
+    size:          vec2,
 
     col            := COLOR_WHITE,
     color_override := COLOR_ZERO,
@@ -488,29 +490,32 @@ draw_rect_projected :: proc(
     img_id         := Image_Name.nil,
 ) {
     PROFILE(#procedure)
-    bl := Vec2{ 0, 0 }
-	tl := Vec2{ 0, size.y }
-	tr := Vec2{ size.x, size.y }
-	br := Vec2{ size.x, 0 }
+    bl := vec2{ 0, 0 }
+    tl := vec2{ 0, size.y }
+    tr := vec2{ size.x, size.y }
+    br := vec2{ size.x, 0 }
 
-    tex_index: [4]u8
+    tex_index: u8
+    flipped_uv := uv
 
-	if img_id == .nil {
-		tex_index = 255 // bypasses texture sampling
-	}
+    if img_id == .nil {
+        tex_index = 255 // bypasses texture sampling
+    } else if img_id == .font {
+        tex_index = 1 // draws the font
+    } else if img_id == .render_tex {
+        tex_index = 2 // draws the render texture
+        flipped_uv = {uv.x, uv.w, uv.z, uv.y}
+    }
 
-	if img_id == .font {
-		tex_index = 1 // draws the font
-	}
-
-	draw_quad_projected(world_to_clip, {bl, tl, tr, br}, col, {uv.xy, uv.xw, uv.zw, uv.zy}, tex_index, color_override)
+    draw_quad_projected(world_to_clip, {bl, tl, tr, br}, col,  {flipped_uv.xy, flipped_uv.xw, flipped_uv.zw, flipped_uv.zy}, tex_index, color_override)
 }
 
+
 draw_quad_projected :: proc(
-	world_to_clip:   Mat4,
-	positions:       [4]Vec2,
+	world_to_clip:   mat4,
+	positions:       [4]vec2,
 	colors:          [4]Color,
-	uvs:             [4]Vec2,
+	uvs:             [4]vec2,
     tex_indicies:    [4]u8,
     col_overrides:   [4]Color,
 ) {
@@ -522,10 +527,10 @@ draw_quad_projected :: proc(
 	verts := &app_state.gfx.frame.quads[app_state.gfx.frame.quad_count]
 	app_state.gfx.frame.quad_count += 1
 
-	verts[0].pos = (world_to_clip * Vec4{positions[0].x, positions[0].y, 0.0, 1.0}).xy
-	verts[1].pos = (world_to_clip * Vec4{positions[1].x, positions[1].y, 0.0, 1.0}).xy
-	verts[2].pos = (world_to_clip * Vec4{positions[2].x, positions[2].y, 0.0, 1.0}).xy
-	verts[3].pos = (world_to_clip * Vec4{positions[3].x, positions[3].y, 0.0, 1.0}).xy
+	verts[0].pos = (world_to_clip * vec4{positions[0].x, positions[0].y, 0.0, 1.0}).xy
+	verts[1].pos = (world_to_clip * vec4{positions[1].x, positions[1].y, 0.0, 1.0}).xy
+	verts[2].pos = (world_to_clip * vec4{positions[2].x, positions[2].y, 0.0, 1.0}).xy
+	verts[3].pos = (world_to_clip * vec4{positions[3].x, positions[3].y, 0.0, 1.0}).xy
 
 	verts[0].col = colors[0]
 	verts[1].col = colors[1]
@@ -839,25 +844,13 @@ inset_rect :: proc(r: ^Rect, inset_x: f32, inset_y: f32) -> Rect {
     return res
 }
 
-make_rect :: proc(pos, size: Vec2) -> Rect {
+make_rect :: proc(pos, size: vec2) -> Rect {
     return {pos.x, pos.y, size.x, size.y}
 }
 
-load_image :: proc(path: string) -> (data: [^]byte, width, height: int, ok: bool) {
-    png_data, succ := os.read_entire_file(path)
-    if !succ {
-        fmt.eprintln("Failed to read image file:", path)
-        return
+load_image  :: proc(path: string, allocator := context.allocator) -> (img: ^image.Image, err: image.Error) {
+    if png_data, ok := os.read_entire_file(path, allocator); ok {
+        img, err = image.load_from_bytes(png_data[:], {.alpha_premultiply}, allocator)
     }
-
-    w, h, channels: i32
-    img_data := stbi.load_from_memory(raw_data(png_data), auto_cast len(png_data), &w, &h, &channels, 4)
-    if img_data == nil {
-        fmt.eprintln("stbi load failed, invalid image?")
-        return
-    }
-
-    log_info("Loaded image from path: {} ({}x{})", path, w, h)
-
-    return img_data,  int(w), int(h), true
+    return
 }
